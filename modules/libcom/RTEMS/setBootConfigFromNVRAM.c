@@ -166,7 +166,7 @@ setBootConfigFromNVRAM(void)
     char *nvp;
 
 # if defined(BSP_NVRAM_BASE_ADDR)
-    nvp = (volatile unsigned char *)(BSP_NVRAM_BASE_ADDR+0x70f8);
+    nvp =(char *) (unsigned char *)(BSP_NVRAM_BASE_ADDR+0x70f8);
 # elif defined(BSP_I2C_VPD_EEPROM_DEV_NAME)
     char gev_buf[3592];
     int fd;
@@ -185,6 +185,7 @@ setBootConfigFromNVRAM(void)
 #  error "No way to read GEV!"
 # endif
 
+#ifdef RTEMS_LEGACY_STACK
     if (rtems_bsdnet_config.bootp != NULL)
         return;
     mot_script_boot = gev("mot-script-boot", nvp);
@@ -218,6 +219,18 @@ setBootConfigFromNVRAM(void)
         rtems_bsdnet_config.ntp_server[0] = rtems_bsdnet_bootp_server_name;
     if ((cp = gev("epics-tz", nvp)) != NULL)
         epicsEnvSet("TZ", cp);
+#else
+printf("env settings for info:\n");
+
+    printf(" mot-/dev/enet0-sipa : %s\n",  gev("mot-/dev/enet0-sipa", nvp));
+    printf(" mot_script_boot s : %s\n",  motScriptParm(mot_script_boot, 's'));
+    printf(" mot-/dev/enet0-gipa : %s\n",  gev("mot-/dev/enet0-gipa", nvp));
+    printf(" mot_script_boot g : %s\n",  motScriptParm(mot_script_boot, 'g'));
+    printf(" mot-/dev/enet0-snma : %s\n",  gev("mot-/dev/enet0-snma", nvp));
+    printf(" mot_script_boot m : %s\n",  motScriptParm(mot_script_boot, 'm'));
+/* with libbsd we use dhcp by default, todo decide with libbsd if not ... */
+
+#endif
 }
 
 #elif defined(HAVE_PPCBUG)

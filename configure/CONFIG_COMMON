@@ -342,12 +342,12 @@ LEXOPT += -I
 #--------------------------------------------------
 # Build compile line here
 
-COMPILE.c   = $(CC) $(CPPFLAGS) $(CFLAGS) $(INCLUDES)
-COMPILE.cpp = $(CCC) $(CPPFLAGS) $(CXXFLAGS) $(INCLUDES)
+COMPILE.c   = $(CC) $(INCLUDES) $(CPPFLAGS) $(CFLAGS)
+COMPILE.cpp = $(CCC) $(INCLUDES) $(CPPFLAGS) $(CXXFLAGS)
 
 #--------------------------------------------------
 # C preprocessor command
-PREPROCESS.cpp = $(CPP) $(CPPFLAGS) $(INCLUDES) $< > $@
+PREPROCESS.cpp = $(CPP) $(INCLUDES) $(CPPFLAGS) $< > $@
 
 #--------------------------------------------------
 # genVersion header defaults

@@ -275,13 +275,31 @@ nfsMount(char *uidhost, char *path, char *mntpoint)
         fprintf(stderr,"nfsMount: out of memory\n");
         return -1;
     }
+
+    int retries = 0;
+    const char *mount_options = NULL;
+
+#ifndef RTEMS_LEGACY_STACK
+    const char *options = NET_CFG_NFS_MOUNT_OPTIONS;
+    if (strlen(options) != 0) {
+        mount_options = options;
+    }
+#endif
     sprintf(dev, "%s:%s", uidhost, path);
-    printf("Mount %s on %s\n", dev, mntpoint);
-    rval = mount_and_make_target_path (
-        dev, mntpoint, RTEMS_FILESYSTEM_TYPE_NFS,
-        RTEMS_FILESYSTEM_READ_WRITE, NULL );
-   if(rval)
-      perror("mount failed");
+    printf("mount: %s -> %s options:%s\n",
+           dev, mntpoint, mount_options);
+
+    do {
+        sleep(1);
+        rval = mount_and_make_target_path(dev, mntpoint,
+              RTEMS_FILESYSTEM_TYPE_NFS, RTEMS_FILESYSTEM_READ_WRITE,
+              mount_options);
+        if (rval < 0) {
+            printf("mount: %d: %s\n", errno, strerror(errno));
+        }
+    } while (rval != 0 && retries++ < 5);
+    if(rval)
+        perror("mount failed");
     free(dev);
     return rval;
 }
@@ -411,9 +429,12 @@ initialize_remote_filesystem(char **argv, int hasLocalFilesystem)
             argv[1] = abspath;
         }
     }
-    errlogPrintf("nfsMount(\"%s\", \"%s\", \"%s\")\n",
+/* libbsd mount can't subdir mount points? */
+
+//    errlogPrintf("nfsMount(\"%s\", \"%s\", \"%s\")\n",
+    printf("nfsMount(\"%s\", \"%s\", \"%s\")\n",
                  server_name, server_path, mount_point);
-    nfsMount(server_name, server_path, mount_point);
+    nfsMount(server_name, server_path, "/Volumes");
 #endif
 }
 
@@ -748,6 +769,7 @@ dhcpcd_hook_handler(rtems_dhcpcd_hook *hook, char *const *env)
         DEFVAR("new_tftp_server_name", bootp_server_name_init),
         DEFVAR("new_bootfile_name", bootp_boot_file_name_init),
         DEFVAR("new_rtems_cmdline", bootp_cmdline_init),
+// this was a stopgap solution        DEFVAR("new_filename", bootp_cmdline_init),
 #undef DEFVAR
         {NULL}
     };
@@ -755,8 +777,7 @@ dhcpcd_hook_handler(rtems_dhcpcd_hook *hook, char *const *env)
 
     printf("\n");
     for (;NULL != *env;++env) {
-        printf("dhcpcd ---> '%s'\n", *env);
-        
+        //printf("dhcpcd ---> '%s'\n", *env);
         for(const struct dhcp_vars_t* var = dhcp_vars; var->name; var++) {
             size_t namelen = strlen(var->name);
 
@@ -780,10 +801,11 @@ dhcpcd_hook_handler(rtems_dhcpcd_hook *hook, char *const *env)
             } else {
                 memcpy(var->var, value, valuelen);
                 var->var[valuelen] = '\0';
-                printf("  '%s' = '%s'\n", var->name, var->var);
+                printf(" dhcpdInfo: '%s' = '%s'\n", var->name, var->var);
 
-                if(var->var==reason && strcmp(reason, "BOUND")==0) {
-                    printf("  is BOUND\n");
+                if( var->var==reason && ( strcmp(reason, "BOUND")==0 
+					  || strcmp(reason, "REBIND") ==0 ) ) {
+                    printf("  is BOUND/REBIND\n");
                     bound = 1;
                 }
             }
@@ -794,7 +816,7 @@ dhcpcd_hook_handler(rtems_dhcpcd_hook *hook, char *const *env)
     if(bound) {
         sethostname (new_host_name, strlen (new_host_name));
         epicsEventSignal(dhcpDone);
-        printf("dhcpd BOUND\n");
+        printf("dhcpd BOUNDed\n");
     }
 }
 
@@ -826,40 +848,45 @@ default_network_set_self_prio(rtems_task_priority prio)
 static void
 default_network_dhcpcd(void)
 {
-    static const char default_cfg[] = "clientid test client\n";
+    static const char default_cfg[] = "clientid EPICS boot\n";
     rtems_status_code sc;
     int fd;
     int rv;
     ssize_t n;
     struct stat statbuf;
 
-    if (ENOENT == stat("/etc/dhcpcd.conf", &statbuf)) {
-        fd = open("/etc/dhcpcd.conf", O_CREAT | O_WRONLY,
-                  S_IRWXU | S_IRWXG | S_IRWXO);
-        assert(fd >= 0);
-
-        n = write(fd, default_cfg, sizeof(default_cfg) - 1);
-        assert(n == (ssize_t) sizeof(default_cfg) - 1);
-
-        static const char fhi_cfg[] =
-            "nodhcp6\n"
-            "ipv4only\n"
-            "option ntp-servers\n"
-            "option rtems_cmdline\n"
-            "option tftp-server-name\n"
-            "option bootfile-name\n"
-            "define 129 string rtems_cmdline\n"
-            "timeout 0";
-
-        n = write(fd, fhi_cfg, sizeof(fhi_cfg) - 1);
-        assert(n == (ssize_t) sizeof(fhi_cfg) - 1);
-
-        rv = close(fd);
-        assert(rv == 0);
+    rv = stat( "/etc/dhcpcd.conf", &statbuf );
+    if( rv==0 )
+    {
+        return; /* already exists, assume file */
+    } else if( errno!=ENOENT ) {
+        perror( "error: default_network_dhcpcd stat /etc/dhcpcd.conf" );
+        return;
     }
+    fd = open( "/etc/dhcpcd.conf", O_CREAT | O_WRONLY,
+                  S_IRWXU | S_IRWXG | S_IRWXO );
+    assert( fd >= 0 );
+    n = write( fd, default_cfg, sizeof(default_cfg) - 1 );
+    assert( n == (ssize_t) sizeof(default_cfg) - 1 );
+
+    static const char fhi_cfg[] =
+           "define 129 string rtems_cmdline\n"
+           "nodhcp6\n"
+           "ipv4only\n"
+           "option ntp-servers\n"
+           "option rtems_cmdline\n"
+           "option tftp-server-name\n"
+           "option bootfile-name\n"
+           "timeout 0";
+
+    n = write( fd, fhi_cfg, sizeof(fhi_cfg) - 1 );
+    assert( n == (ssize_t) sizeof(fhi_cfg) - 1 );
+
+    rv = close( fd );
+    assert( rv == 0 );
     
-    sc = rtems_dhcpcd_start(NULL);
-    assert(sc == RTEMS_SUCCESSFUL);
+    sc = rtems_dhcpcd_start( NULL );
+    assert( sc == RTEMS_SUCCESSFUL );
 }
 #endif // not RTEMS_LEGACY_STACK
 
@@ -971,6 +998,9 @@ POSIX_Init ( void *argument __attribute__((unused)))
      */
     logReset();
 
+/* tests ... */
+        extern void setBootConfigFromNVRAM(void);
+        setBootConfigFromNVRAM();
     /* TBD ...
      * Architecture-specific hooks
      */
@@ -992,6 +1022,8 @@ POSIX_Init ( void *argument __attribute__((unused)))
     /*
      * Create a reasonable environment
      */
+
+    fixup_hosts();
     
     putenv ("TERM=xterm");
     putenv ("IOCSH_HISTSIZE=20");
@@ -1002,7 +1034,7 @@ POSIX_Init ( void *argument __attribute__((unused)))
     printf("\n***** RTEMS Version: %s *****\n",
         rtems_get_version_string());
 
-#ifndef RTEMS_LEGACY_STACK
+#ifndef RTEMS_LEGACY_STACK //use new libbsd
 #if defined(QEMU_FIXUPS) && defined(__i386__)
     // glorious hack to stub out useless EEPROM check
     // which takes sooooo longggg w/ QEMU
@@ -1019,11 +1051,11 @@ POSIX_Init ( void *argument __attribute__((unused)))
      * -append "--video=off --console=/dev/com1" -kernel libComTestHarness
      */
     printf("\n***** Initializing network (libbsd, dhcpcd) *****\n");
-    rtems_bsd_setlogpriority("debug");
+    // rtems_bsd_setlogpriority("debug");
     on_exit(default_network_on_exit, NULL);
 
     /* Let other tasks run to complete background work */
-    default_network_set_self_prio(RTEMS_MAXIMUM_PRIORITY - 1U);
+    default_network_set_self_prio(RTEMS_MAXIMUM_PRIORITY - 10U);
 
     sc = rtems_bsd_initialize();
     assert(sc == RTEMS_SUCCESSFUL);
@@ -1040,13 +1072,13 @@ POSIX_Init ( void *argument __attribute__((unused)))
     rtems_dhcpcd_add_hook(&dhcpcd_hook);
 
     printf("\n***** Start default network dhcpcd *****\n");
-    // if MY_BOOTP???
+    // if MY_BOOTP???  how are we supposed to find out here if dhcp is even desired
     default_network_dhcpcd();
 
-    /* this seems to be hard coded in the BSP -> Sebastian Huber ? */
+    /* this seems to be hard coded in the BSP -> Sebastian Huber ?
     printf("\n--Info (hpj)-- bsd task prio IRQS: %d  -----\n", rtems_bsd_get_task_priority("IRQS"));
     printf("\n--Info (hpj)-- bsd task prio TIME: %d  -----\n", rtems_bsd_get_task_priority("TIME"));
-
+    */
 
     // wait for dhcp done ... should be if SYNCDHCP is used
     epicsEventWaitStatus stat;
@@ -1066,10 +1098,12 @@ POSIX_Init ( void *argument __attribute__((unused)))
         "netstat", "-rn", NULL
     };
 
+/*
     printf("-------------- IFCONFIG -----------------\n");
     rtems_bsd_command_ifconfig(1, (char**) ifconfg_args);
     printf("-------------- NETSTAT ------------------\n");
     rtems_bsd_command_netstat(2, (char**) netstat_args);
+*/
 
     /* until now there is no NTP support in libbsd -> Sebastian Huber ... */
     printf("\n***** Until now no NTP support in RTEMS 5 with rtems-libbsd *****\n");
@@ -1113,7 +1147,6 @@ POSIX_Init ( void *argument __attribute__((unused)))
 
     printf("\n***** Setting up file system *****\n");
     initialize_remote_filesystem(argv, initialize_local_filesystem(argv));
-    fixup_hosts();
 
     /*
      * More environment: iocsh prompt and hostname
