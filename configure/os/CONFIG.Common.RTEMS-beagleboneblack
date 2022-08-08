@@ -12,10 +12,12 @@ GNU_TARGET = arm-rtems
 OP_SYS_LDLIBS += -qrtems -Wl,--gc-sections
 ARCH_DEP_LDFLAGS = -L$(RTEMS_BASE)/$(GNU_TARGET)$(RTEMS_VERSION)/beagleboneblack/lib/
 
+include $(CONFIG)/os/CONFIG.Common.RTEMS
+
+# This check must appear after the above include
 ifeq ($(RTEMS_VERSION),6)
 # Which nfs version to use
 ARCH_DEP_CFLAGS += -DNET_CFG_NFS_MOUNT_OPTIONS=\"nfsv4,minorversion=1\"
 endif
 
-include $(CONFIG)/os/CONFIG.Common.RTEMS
 
